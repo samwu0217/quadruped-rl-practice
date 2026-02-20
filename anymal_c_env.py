@@ -62,9 +62,9 @@ class AnymalCMujocoEnv(MujocoEnv):
         }
         self.cost_weights = {
             "torque": 0.0002, # Was 0.0002
-            "vertical_vel": 10.0,  # Was 1.0
-            "xy_angular_vel": 0.1,  # Was 0.05
-            "action_rate": 0.05,
+            "vertical_vel": 15.0,  # Was 1.0
+            "xy_angular_vel": 5.0,  # Was 0.05
+            "action_rate": 0.5,
             "joint_limit": 10.0,
             "joint_velocity": 0.005, # Was 0.01
             "joint_acceleration": 2.5e-7, 
@@ -357,7 +357,7 @@ class AnymalCMujocoEnv(MujocoEnv):
         )
         # flight cost
         num_feet_on_ground = np.sum(self.feet_contact_forces > 1.0)
-        flight_cost = 5.0 if num_feet_on_ground == 0 else 0.0
+        flight_cost = 30.0 if num_feet_on_ground == 0 else 0.0
 
         # Negative Costs
         ctrl_cost = self.torque_cost * self.cost_weights["torque"]
