@@ -62,7 +62,7 @@ class AnymalCMujocoEnv(MujocoEnv):
         }
         self.cost_weights = {
             "torque": 0.0002, # Was 0.0002
-            "vertical_vel": 3.0,  # Was 1.0
+            "vertical_vel": 10.0,  # Was 1.0
             "xy_angular_vel": 0.1,  # Was 0.05
             "action_rate": 0.05,
             "joint_limit": 10.0,
@@ -253,7 +253,8 @@ class AnymalCMujocoEnv(MujocoEnv):
         self._feet_air_time += self.dt
 
         # Award the feets that have just finished their stride (first step with contact)
-        air_time_reward = np.sum((self._feet_air_time - 0.2) * first_contact)
+        capped_air_time = np.clip(self._feet_air_time - 0.2, -1.0, 0.25)
+        air_time_reward = np.sum(capped_air_time * first_contact)
         # No award if the desired velocity is very low (i.e. robot should remain stationary and feet shouldn't move)
         air_time_reward *= np.linalg.norm(self._desired_velocity[:2]) > 0.1
 
@@ -354,6 +355,9 @@ class AnymalCMujocoEnv(MujocoEnv):
             + healthy_reward
             + feet_air_time_reward
         )
+        # flight cost
+        num_feet_on_ground = np.sum(self.feet_contact_forces > 1.0)
+        flight_cost = 5.0 if num_feet_on_ground == 0 else 0.0
 
         # Negative Costs
         ctrl_cost = self.torque_cost * self.cost_weights["torque"]
@@ -388,6 +392,7 @@ class AnymalCMujocoEnv(MujocoEnv):
             + joint_acceleration_cost
             + orientation_cost
             + default_joint_position_cost
+            + flight_cost
         )
 
         # reward = max(0.0, rewards - costs)
