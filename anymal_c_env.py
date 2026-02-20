@@ -58,19 +58,19 @@ class AnymalCMujocoEnv(MujocoEnv):
             "linear_vel_tracking": 10.0,  # Was 1.0
             "angular_vel_tracking": 2.0,  # Was 0.5
             "healthy": 0.05,  # was 0.05
-            "feet_airtime": 2.0, # Was 1.0
+            "feet_airtime": 5.0, # Was 1.0
         }
         self.cost_weights = {
             "torque": 0.0002, # Was 0.0002
-            "vertical_vel": 15.0,  # Was 1.0
+            "vertical_vel": 10.0,  # Was 1.0
             "xy_angular_vel": 5.0,  # Was 0.05
             "action_rate": 0.5,
             "joint_limit": 10.0,
             "joint_velocity": 0.005, # Was 0.01
             "joint_acceleration": 2.5e-7, 
             "orientation": 0.5, # Was 1.0
-            "collision": 1.0,
-            "default_joint_position": 0.1
+            "collision": 2.0,
+            "default_joint_position": 2.0
         }
 
         self._curriculum_base = 0.3

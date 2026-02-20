@@ -88,7 +88,8 @@ def train(args):
     if args.model_path is not None:
         custom_objects = {
             "learning_rate": 1e-4,
-            "target_kl": 0.01
+            "target_kl": 0.01,
+            "ent_coef": 0.02
         }
         model = PPO.load(
             path=args.model_path, env=vec_env, verbose=1, tensorboard_log=LOG_DIR, custom_objects=custom_objects
