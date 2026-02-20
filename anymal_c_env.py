@@ -55,31 +55,36 @@ class AnymalCMujocoEnv(MujocoEnv):
 
         # Weights for the reward and cost functions
         self.reward_weights = {
-            "linear_vel_tracking": 2.0,  # Was 1.0
-            "angular_vel_tracking": 1.0,
-            "healthy": 0.0,  # was 0.05
-            "feet_airtime": 1.0,
+            "linear_vel_tracking": 10.0,  # Was 1.0
+            "angular_vel_tracking": 2.0,  # Was 0.5
+            "healthy": 0.05,  # was 0.05
+            "feet_airtime": 2.0, # Was 1.0
         }
         self.cost_weights = {
-            "torque": 0.0002,
-            "vertical_vel": 2.0,  # Was 1.0
-            "xy_angular_vel": 0.05,  # Was 0.05
-            "action_rate": 0.01,
+            "torque": 0.0002, # Was 0.0002
+            "vertical_vel": 3.0,  # Was 1.0
+            "xy_angular_vel": 0.1,  # Was 0.05
+            "action_rate": 0.05,
             "joint_limit": 10.0,
-            "joint_velocity": 0.01,
+            "joint_velocity": 0.005, # Was 0.01
             "joint_acceleration": 2.5e-7, 
-            "orientation": 1.0,
+            "orientation": 0.5, # Was 1.0
             "collision": 1.0,
             "default_joint_position": 0.1
         }
 
         self._curriculum_base = 0.3
         self._gravity_vector = np.array(self.model.opt.gravity)
-        self._default_joint_position = np.zeros(12) # orignial: np.array(self.model.key_ctrl[0])
+        self._default_joint_position = np.array([
+             0.03,  0.4, -0.8,  # LF (左前)：側踢微張, 大腿往前, 小腿往後收
+            -0.03,  0.4, -0.8,  # RF (右前)：側踢微張, 大腿往前, 小腿往後收
+             0.03, -0.4,  0.8,  # LH (左後)：側踢微張, 大腿往後, 小腿往前收
+            -0.03, -0.4,  0.8   # RH (右後)：側踢微張, 大腿往後, 小腿往前收
+        ])
 
         # vx (m/s), vy (m/s), wz (rad/s)
-        self._desired_velocity_min = np.array([0.5, -0.0, -0.0])
-        self._desired_velocity_max = np.array([0.5, 0.0, 0.0])
+        self._desired_velocity_min = np.array([0.6, -0.0, -0.0])
+        self._desired_velocity_max = np.array([1.0, 0.0, 0.0])
         self._desired_velocity = self._sample_desired_vel()  # [0.5, 0.0, 0.0]
         self._obs_scale = {
             "linear_velocity": 2.0,
@@ -87,7 +92,7 @@ class AnymalCMujocoEnv(MujocoEnv):
             "dofs_position": 1.0,
             "dofs_velocity": 0.05,
         }
-        self._tracking_velocity_sigma = 0.25
+        self._tracking_velocity_sigma = 0.05 # Was 0.25
 
         # Metrics used to determine if the episode should be terminated
         self._healthy_z_range = (0.3, 0.8)
@@ -144,12 +149,18 @@ class AnymalCMujocoEnv(MujocoEnv):
 
     def step(self, action):
         self._step += 1
-        self.do_simulation(action, self.frame_skip)
+        action_scale = 0.5
+        target_angles = self._default_joint_position + action * action_scale
+        self.do_simulation(target_angles, self.frame_skip)
 
         observation = self._get_obs()
         reward, reward_info = self._calc_reward(action)
         # TODO: Consider terminating if knees touch the ground
         terminated = not self.is_healthy
+
+        if self._step >= 200 and self.data.qpos[0] < 0.5:
+            terminated = True
+
         truncated = self._step >= (self._max_episode_time_sec / self.dt)
         info = {
             "x_position": self.data.qpos[0],
@@ -204,10 +215,19 @@ class AnymalCMujocoEnv(MujocoEnv):
     ######### Positive Reward functions #########
     @property
     def linear_velocity_tracking_reward(self):
-        vel_sqr_error = np.sum(
-            np.square(self._desired_velocity[:2] - self.data.qvel[:2])
-        )
-        return np.exp(-vel_sqr_error / self._tracking_velocity_sigma)
+        # vel_sqr_error = np.sum(
+        #     np.square(self._desired_velocity[:2] - self.data.qvel[:2])
+        # )
+        # return np.exp(-vel_sqr_error / self._tracking_velocity_sigma)
+        v_x = self.data.qvel[0]
+        v_y = self.data.qvel[1]
+        v_target = self._desired_velocity[0]
+        reward_x = np.clip(v_x / v_target, 0.0, 1.0)
+        
+        # 🌟 新增 Y 軸懲罰：只要產生側向速度，就扣掉 X 軸的獎勵
+        penalty_y = np.square(v_y) * 2.0 
+        
+        return max(0.0, reward_x - penalty_y)
 
     @property
     def angular_velocity_tracking_reward(self):
@@ -233,7 +253,7 @@ class AnymalCMujocoEnv(MujocoEnv):
         self._feet_air_time += self.dt
 
         # Award the feets that have just finished their stride (first step with contact)
-        air_time_reward = np.sum((self._feet_air_time - 1.0) * first_contact)
+        air_time_reward = np.sum((self._feet_air_time - 0.2) * first_contact)
         # No award if the desired velocity is very low (i.e. robot should remain stationary and feet shouldn't move)
         air_time_reward *= np.linalg.norm(self._desired_velocity[:2]) > 0.1
 
@@ -370,12 +390,17 @@ class AnymalCMujocoEnv(MujocoEnv):
             + default_joint_position_cost
         )
 
-        reward = max(0.0, rewards - costs)
+        # reward = max(0.0, rewards - costs)
         # reward = rewards - self.curriculum_factor * costs
+        reward = rewards - costs
+
         reward_info = {
             "linear_vel_tracking_reward": linear_vel_tracking_reward,
             "reward_ctrl": -ctrl_cost,
             "reward_survive": healthy_reward,
+            "total_cost": costs, 
+            "x_position": self.data.qpos[0], 
+            "base_vel_x": self.data.qvel[0], 
         }
 
         return reward, reward_info
@@ -415,29 +440,26 @@ class AnymalCMujocoEnv(MujocoEnv):
         return curr_obs
 
     def reset_model(self):
-        # # Reset the position and control values with noise
-        # self.data.qpos[:] = self.model.key_qpos[0] + self.np_random.uniform(
-        #     low=-self._reset_noise_scale,
-        #     high=self._reset_noise_scale,
-        #     size=self.model.nq,
-        # )
-        # self.data.ctrl[:] = self.model.key_ctrl[
-        #     0
-        # ] + self._reset_noise_scale * self.np_random.standard_normal(
-        #     *self.data.ctrl.shape
-        # )
         # 1. 重設所有位置為 0
         qpos = np.zeros(self.model.nq)
         qvel = np.zeros(self.model.nv)
     
         # 2. 設定軀幹初始高度 (參考 XML 的 0.62)
-        qpos[2] = 0.62 
+        qpos[0:3] = [0.0, 0.0, 0.62] 
         # 如果需要，可以設定初始四元數 (w=1, x=0, y=0, z=0)
         qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+
+        qpos[7:19] = self._default_joint_position.copy()
     
         # 3. 加入隨機噪聲 (避免每次 reset 都完全一樣)
-        qpos += self.np_random.uniform(low=-self._reset_noise_scale, high=self._reset_noise_scale, size=self.model.nq)
-    
+        joint_noise = self.np_random.uniform(
+            low=-self._reset_noise_scale, 
+            high=self._reset_noise_scale, 
+            size=12
+        )
+        qpos[7:19] += joint_noise
+        qvel[0] = np.random.uniform(0.5, 0.8)
+
         # 4. 套用狀態
         self.set_state(qpos, qvel)
 

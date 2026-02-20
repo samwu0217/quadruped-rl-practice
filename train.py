@@ -2,18 +2,46 @@ import argparse
 import os
 import time
 from pathlib import Path
+from typing import Callable
 
 import gymnasium as gym
+import numpy as np
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import EvalCallback
+from stable_baselines3.common.callbacks import EvalCallback, BaseCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.env_util import make_vec_env
 from anymal_c_env import AnymalCMujocoEnv
 from tqdm import tqdm
+from stable_baselines3.common.vec_env import VecMonitor
 
 MODEL_DIR = "models"
 LOG_DIR = "logs"
 
+class TensorboardCallback(BaseCallback):
+    """
+    自定義 Callback：每一小步都從 info 中抓取數據，並傳送給 Tensorboard
+    """
+    def __init__(self, verbose=0):
+        super().__init__(verbose)
+
+    def _on_step(self) -> bool:
+        # 檢查 Locals 中是否有環境回傳的 infos
+        if 'infos' in self.locals:
+            # 取出 8 個平行環境目前的 x_position
+            x_positions = [info.get('x_position') for info in self.locals['infos'] if 'x_position' in info]
+            
+            # 如果有抓到數據，計算平均值並記錄到 TensorBoard
+            if x_positions:
+                avg_x_pos = np.mean(x_positions)
+                self.logger.record("rollout/x_position", avg_x_pos)
+                
+            # 你也可以在這裡加入其他你想看的變數，例如 base_vel_x
+            vel_x_list = [info.get('base_vel_x') for info in self.locals['infos'] if 'base_vel_x' in info]
+            if vel_x_list:
+                avg_vel_x = np.mean(vel_x_list)
+                self.logger.record("rollout/base_vel_x", avg_vel_x)
+
+        return True
 
 def train(args):
     vec_env = make_vec_env(
@@ -24,11 +52,14 @@ def train(args):
         vec_env_cls=SubprocVecEnv,
     )
 
+    vec_env = VecMonitor(vec_env)
+
     train_time = time.strftime("%Y-%m-%d_%H-%M-%S")
-    if args.run_name is None:
-        run_name = f"{train_time}"
-    else:
-        run_name = f"{train_time}-{args.run_name}"
+    # if args.run_name is None:
+    #     run_name = f"{train_time}"
+    # else:
+    #     run_name = f"{train_time}-{args.run_name}"
+    run_name = f"{train_time}"
 
     model_path = f"{MODEL_DIR}/{run_name}"
     print(
@@ -47,21 +78,31 @@ def train(args):
         render=False,
     )
 
+    tb_callback = TensorboardCallback()
+
+    def linear_schedule(initial_value: float) -> Callable[[float], float]:
+        def func(progress_remaining: float) -> float:
+            return progress_remaining * initial_value
+        return func
+
     if args.model_path is not None:
+        custom_objects = {
+            "learning_rate": 1e-4,
+            "target_kl": 0.01
+        }
         model = PPO.load(
-            path=args.model_path, env=vec_env, verbose=1, tensorboard_log=LOG_DIR
+            path=args.model_path, env=vec_env, verbose=1, tensorboard_log=LOG_DIR, custom_objects=custom_objects
         )
     else:
         # Default PPO model hyper-parameters give good results
-        # TODO: Use dynamic learning rate
-        model = PPO("MlpPolicy", vec_env, verbose=1, tensorboard_log=LOG_DIR)
+        model = PPO("MlpPolicy", vec_env, verbose=1, tensorboard_log=LOG_DIR, learning_rate=linear_schedule(1e-4), target_kl=0.015, batch_size=1024, n_steps=2048, n_epochs=5, policy_kwargs=dict(log_std_init=-2.0))
 
     model.learn(
         total_timesteps=args.total_timesteps,
         reset_num_timesteps=False,
         progress_bar=True,
         tb_log_name=run_name,
-        callback=eval_callback,
+        callback= [eval_callback, tb_callback],
     )
     # Save final model
     model.save(f"{model_path}/final_model")
@@ -135,7 +176,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_parallel_envs",
         type=int,
-        default=12,
+        default=8,
         help="Number of parallel environments while training",
     )
     parser.add_argument(
